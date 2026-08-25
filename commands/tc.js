@@ -1,0 +1,191 @@
+// ./commands/bc.js
+
+const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
+const { isOwner, getRawNumber } = require('../utils/owner');
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+const STYLE = {
+    forwardingScore: 350,
+    isForwarded: true,
+    forwardedNewsletterMessageInfo: {
+        newsletterJid: '120363406589060879@newsletter',
+        newsletterName: 'KILLUA TECH',
+        serverMessageId: 202,
+    },
+};
+
+async function downloadMedia(mediaMessage, type) {
+    const stream = await downloadContentFromMessage(mediaMessage, type);
+    let buffer = Buffer.from([]);
+    for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+    return buffer;
+}
+
+module.exports = {
+    name: 'tc',
+    aliases: ['broadcast', 'sendall'],
+    category: 'owner',
+
+    async execute({ sock, msg, args, jid }) {
+        const senderJid = msg.key.participant || msg.key.remoteJid;
+
+        if (!isOwner(sock, senderJid)) {
+            return; // Silencieux
+        }
+
+        // Récupérer les groupes de CE BOT
+        let groups = [];
+        try {
+            const allChats = await sock.groupFetchAllParticipating();
+            groups = Object.values(allChats).filter(g => g.id.endsWith('@g.us'));
+        } catch (err) {
+            return sock.sendMessage(jid, { text: '❌ Failed to fetch groups.', contextInfo: STYLE }, { quoted: msg });
+        }
+
+        if (groups.length === 0) {
+            return sock.sendMessage(jid, { text: '❌ Bot is not in any group.', contextInfo: STYLE }, { quoted: msg });
+        }
+
+        const subCommand = args[0]?.toLowerCase();
+
+        // SHOW LIST
+        if (!subCommand || (isNaN(subCommand) && subCommand !== 'all')) {
+            let listText = `📋 *Broadcast — ${groups.length} Groups*\n\n`;
+            groups.forEach((g, i) => {
+                listText += `*${i + 1}.* ${g.subject}\n   \`${g.id.split('@')[0]}\`\n\n`;
+            });
+            listText +=
+                '📌 *Usage:*\n' +
+                '.bc 1 2 3 (reply to message)\n' +
+                '.bc all (reply to message)\n' +
+                '.bc <text> (send text to all)\n\n' +
+                '💡 Reply to a message, then select groups.';
+
+            return sock.sendMessage(jid, {
+                text: listText,
+                contextInfo: STYLE,
+            }, { quoted: msg });
+        }
+
+        // SELECT GROUPS
+        let selectedGroups = [];
+
+        if (subCommand === 'all') {
+            selectedGroups = groups;
+        } else {
+            const indices = [];
+            for (const arg of args) {
+                const num = parseInt(arg);
+                if (!isNaN(num) && num > 0 && num <= groups.length) {
+                    indices.push(num);
+                } else {
+                    break;
+                }
+            }
+            selectedGroups = indices.map(i => groups[i - 1]);
+        }
+
+        if (selectedGroups.length === 0) {
+            return sock.sendMessage(jid, {
+                text: '⚠️ No valid groups selected.',
+                contextInfo: STYLE,
+            }, { quoted: msg });
+        }
+
+        const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+
+        let textContent = '';
+        const firstNonNumeric = args.findIndex(a => isNaN(parseInt(a)) && a.toLowerCase() !== 'all');
+        if (firstNonNumeric >= 0) {
+            textContent = args.slice(firstNonNumeric).join(' ');
+        }
+
+        if (!quoted && !textContent) {
+            return sock.sendMessage(jid, {
+                text: '❌ Reply to a message or type text to broadcast.',
+                contextInfo: STYLE,
+            }, { quoted: msg });
+        }
+
+        try { await sock.sendMessage(jid, { react: { text: '📤', key: msg.key } }); } catch (_) {}
+
+        let sent = 0;
+        let failed = 0;
+
+        for (const group of selectedGroups) {
+            try {
+                if (quoted) {
+                    if (quoted.imageMessage) {
+                        const buffer = await downloadMedia(quoted.imageMessage, 'image');
+                        await sock.sendMessage(group.id, {
+                            image: buffer,
+                            caption: quoted.imageMessage.caption || textContent || '',
+                            contextInfo: STYLE,
+                        });
+                    } else if (quoted.videoMessage) {
+                        const buffer = await downloadMedia(quoted.videoMessage, 'video');
+                        await sock.sendMessage(group.id, {
+                            video: buffer,
+                            caption: quoted.videoMessage.caption || textContent || '',
+                            contextInfo: STYLE,
+                        });
+                    } else if (quoted.audioMessage || quoted.voiceMessage) {
+                        const audioMsg = quoted.audioMessage || quoted.voiceMessage;
+                        const buffer = await downloadMedia(audioMsg, 'audio');
+                        await sock.sendMessage(group.id, {
+                            audio: buffer,
+                            mimetype: 'audio/mp4',
+                            ptt: audioMsg.ptt || false,
+                            contextInfo: STYLE,
+                        });
+                    } else if (quoted.stickerMessage) {
+                        const buffer = await downloadMedia(quoted.stickerMessage, 'sticker');
+                        await sock.sendMessage(group.id, {
+                            sticker: buffer,
+                            contextInfo: STYLE,
+                        });
+                    } else if (quoted.conversation || quoted.extendedTextMessage?.text) {
+                        const txt = quoted.conversation || quoted.extendedTextMessage?.text || '';
+                        await sock.sendMessage(group.id, {
+                            text: txt,
+                            contextInfo: STYLE,
+                        });
+                    } else if (quoted.documentMessage) {
+                        const buffer = await downloadMedia(quoted.documentMessage, 'document');
+                        await sock.sendMessage(group.id, {
+                            document: buffer,
+                            mimetype: quoted.documentMessage.mimetype || 'application/octet-stream',
+                            fileName: quoted.documentMessage.fileName || 'document',
+                            contextInfo: STYLE,
+                        });
+                    } else {
+                        await sock.sendMessage(group.id, {
+                            text: textContent,
+                            contextInfo: STYLE,
+                        });
+                    }
+                } else {
+                    await sock.sendMessage(group.id, {
+                        text: textContent,
+                        contextInfo: STYLE,
+                    });
+                }
+
+                sent++;
+                console.log(`✅ Sent to ${group.subject}`);
+            } catch (err) {
+                failed++;
+                console.log(`❌ Failed ${group.subject}: ${err.message}`);
+            }
+
+            await delay(3000);
+        }
+
+        await sock.sendMessage(jid, {
+            text: `✅ *Broadcast Complete*\n\n📤 *Sent:* ${sent}\n❌ *Failed:* ${failed}\n📊 *Total:* ${selectedGroups.length}\n\n⚡ _Killua_`,
+            contextInfo: STYLE,
+        }, { quoted: msg });
+
+        try { await sock.sendMessage(jid, { react: { text: '✅', key: msg.key } }); } catch (_) {}
+    },
+};
