@@ -67,7 +67,7 @@ const FALLBACK_IMAGES = [
     'https://files.catbox.moe/w2hyif.jpg',
 ];
 
-const DEFAULT_AVATAR = ''https://files.catbox.moe/5xddqx.jpg',
+const DEFAULT_AVATAR = 'https://files.catbox.moe/5xddqx.jpg',
     'https://files.catbox.moe/dynzbj.jpg';
 
 function getRandomFallback() {
