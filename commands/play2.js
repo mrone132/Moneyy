@@ -1,0 +1,281 @@
+// ./commands/play.js
+
+const axios = require('axios');
+
+const MAX_DURATION_SECONDS = 600;
+const FALLBACK_THUMB = 'https://files.catbox.moe/udi4uy.jpg';
+
+const activeSearches = new Map();
+
+const STYLE = {
+    forwardingScore: 350,
+    isForwarded: true,
+    forwardedNewsletterMessageInfo: {
+        newsletterJid: '120363406589060879@newsletter',
+        newsletterName: '𝐊𝐈𝐋𝐋𝐔𝐀 𝐓𝐄𝐀𝐌',
+        serverMessageId: 202,
+    },
+};
+
+function parseDuration(str) {
+    if (!str) return 0;
+    const s = String(str).trim();
+    const m = s.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    if (m) return (parseInt(m[1])||0)*3600 + (parseInt(m[2])||0)*60 + (parseInt(m[3])||0);
+    return 0;
+}
+
+function formatDuration(sec) {
+    if (!sec) return 'Unknown';
+    const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = Math.floor(sec%60);
+    return h > 0 ? `${h}h ${m}m ${s}s` : m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+
+const SEARCH_APIS = [
+    {
+        name: 'NexRay',
+        fn: async (q) => {
+            const { data } = await axios.get(`https://api.nexray.eu.cc/search/youtube?q=${encodeURIComponent(q)}`, { timeout: 15000 });
+            return (data?.result || []).map(r => ({
+                title: r.title, url: `https://youtube.com/watch?v=${r.id}`,
+                duration: r.duration, durationSeconds: r.seconds || parseDuration(r.duration),
+                views: r.views, thumbnail: r.image_url || '', channel: r.channel || '',
+            }));
+        },
+    },
+    {
+        name: 'DavidCyril',
+        fn: async (q) => {
+            const { data } = await axios.get(`https://apis.davidcyriltech.my.id/youtube/search?query=${encodeURIComponent(q)}`, { timeout: 15000 });
+            return (data?.results || []).map(r => ({
+                title: r.title, url: `https://youtube.com/watch?v=${r.videoId}`,
+                duration: r.duration, durationSeconds: parseDuration(r.duration),
+                views: r.views?.toString() || '', thumbnail: r.thumbnail || '',
+            }));
+        },
+    },
+    {
+        name: 'Yupra',
+        fn: async (q) => {
+            const { data } = await axios.get(`https://api.yupra.my.id/api/search/youtube?q=${encodeURIComponent(q)}`, { timeout: 15000 });
+            return (data?.results || []).map(r => ({
+                title: r.title, url: `https://www.youtube.com/watch?v=${r.videoId}`,
+                duration: r.duration, durationSeconds: r.seconds || parseDuration(r.duration),
+                views: r.views || '', thumbnail: r.image_url || '',
+            }));
+        },
+    },
+    {
+        name: 'GiftedTech',
+        fn: async (q) => {
+            const { data } = await axios.get(`https://api.giftedtech.co.ke/api/search/yts?apikey=gifted&query=${encodeURIComponent(q)}`, { timeout: 15000 });
+            let results = data?.result || data?.results || (Array.isArray(data) ? data : []);
+            return results.map(r => ({
+                title: r.title || r.name, url: r.url || r.link || '',
+                duration: r.duration || r.timestamp, durationSeconds: parseDuration(r.duration || r.timestamp),
+                views: r.views || r.view_count, thumbnail: r.image_url || r.thumbnail || '',
+            }));
+        },
+    },
+];
+
+const DOWNLOAD_APIS = [
+    {
+        name: 'NeoSoft',
+        fn: async (url) => {
+            const { data } = await axios.get(`https://api.neosoft.best/api/downloader/youtube-play?q=${encodeURIComponent(url)}&type=mp3`, { timeout: 40000 });
+            return { downloadUrl: data?.download || '', title: data?.title || '', artist: data?.artist || '', thumbnail: data?.thumbnail || FALLBACK_THUMB, duration: data?.duration || 0 };
+        },
+    },
+    {
+        name: 'NexRay YTPlay',
+        fn: async (url) => {
+            const { data } = await axios.get(`https://api.nexray.eu.cc/downloader/ytplay?q=${encodeURIComponent(url)}`, { timeout: 40000 });
+            return { downloadUrl: data?.result?.download_url || '', title: data?.result?.title || '', thumbnail: data?.result?.thumbnail || FALLBACK_THUMB };
+        },
+    },
+    {
+        name: 'NexRay YTMP3',
+        fn: async (url) => {
+            const { data } = await axios.get(`https://api.nexray.eu.cc/downloader/ytmp3?url=${encodeURIComponent(url)}`, { timeout: 40000 });
+            return { downloadUrl: data?.result?.download_url || '', title: data?.result?.title || '', thumbnail: data?.result?.thumbnail || FALLBACK_THUMB };
+        },
+    },
+    {
+        name: 'DavidCyril YTMP3',
+        fn: async (url) => {
+            const { data } = await axios.get(`https://apis.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(url)}`, { timeout: 40000 });
+            return { downloadUrl: data?.result?.download_url || '', title: data?.result?.title || '', thumbnail: data?.result?.thumbnail || FALLBACK_THUMB };
+        },
+    },
+    {
+        name: 'DavidCyril YTMP3V2',
+        fn: async (url) => {
+            const { data } = await axios.get(`https://apis.davidcyriltech.my.id/download/ytmp3v2?url=${encodeURIComponent(url)}`, { timeout: 40000 });
+            return { downloadUrl: data?.result?.download_url || data?.download_url || '', title: data?.result?.title || data?.title || '', thumbnail: data?.result?.thumbnail || data?.thumbnail || FALLBACK_THUMB };
+        },
+    },
+    {
+        name: 'Sylphy V2',
+        fn: async (url) => {
+            const { data } = await axios.get(`https://sylphyy.xyz/download/v2/ytmp3?url=${encodeURIComponent(url)}`, { timeout: 40000 });
+            return { downloadUrl: data?.result?.dl_url || '', title: data?.result?.title || '', thumbnail: FALLBACK_THUMB };
+        },
+    },
+    {
+        name: 'Aswin Sparky',
+        fn: async (url) => {
+            const { data } = await axios.get(`https://api-aswin-sparky.koyeb.app/api/downloader/ytv?url=${encodeURIComponent(url)}`, { timeout: 40000 });
+            return { downloadUrl: data?.data?.url || '', title: data?.data?.title || '', thumbnail: FALLBACK_THUMB };
+        },
+    },
+    {
+        name: 'PrinceTech',
+        fn: async (url) => {
+            const { data } = await axios.get(`https://api.princetechn.com/api/download/ytmp3?apikey=prince&url=${encodeURIComponent(url)}`, { timeout: 40000 });
+            return { downloadUrl: data?.result?.download_url || data?.result?.url || data?.download_url || data?.url || '', title: data?.result?.title || data?.title || '', thumbnail: data?.result?.thumbnail || FALLBACK_THUMB };
+        },
+    },
+    {
+        name: 'GiftedTech',
+        fn: async (url) => {
+            const { data } = await axios.get(`https://api.giftedtech.co.ke/api/download/ytmp3?apikey=gifted&url=${encodeURIComponent(url)}`, { timeout: 40000 });
+            return { downloadUrl: data?.result?.download_url || data?.result?.url || data?.url || data?.link || data?.download_url || '', title: data?.result?.title || data?.title || '', thumbnail: data?.result?.thumbnail || data?.thumbnail || FALLBACK_THUMB };
+        },
+    },
+];
+
+module.exports = {
+    name: 'play2',
+    aliases: ['ytmp3', 'music', 'song', 'youtube', 'yts'],
+    category: 'downloader',
+
+    async execute({ sock, msg, args, jid }) {
+        const senderJid = msg.key.participant || msg.key.remoteJid;
+        const input = args.join(' ');
+
+        if (!input || input.trim().length < 1) {
+            return sock.sendMessage(jid, {
+                text:
+                    '🎵 *YouTube Music Downloader*\n\n' +
+                    '⚡ *Usage:*\n' +
+                    '.play2 <song name>\n' +
+                    '.play2 <number> (to download)\n\n' +
+                    '✨ *Examples:*\n' +
+                    '.play2 Spectre\n' +
+                    '.play2 Faded Alan Walker\n' +
+                    '.play2 1\n\n' +
+                    '🔄 4 search + 9 download sources',
+                contextInfo: STYLE,
+            }, { quoted: msg });
+        }
+
+        const numberMatch = input.match(/^(\d+)$/);
+        if (numberMatch) {
+            const selectedIndex = parseInt(numberMatch[1]) - 1;
+            const stored = activeSearches.get(senderJid);
+            if (!stored?.results?.length) {
+                return sock.sendMessage(jid, { text: '⚠️ No active search.', contextInfo: STYLE }, { quoted: msg });
+            }
+            if (selectedIndex < 0 || selectedIndex >= stored.results.length) {
+                return sock.sendMessage(jid, { text: `⚠️ Choose 1-${stored.results.length}.`, contextInfo: STYLE }, { quoted: msg });
+            }
+            const selected = stored.results[selectedIndex];
+            try { await sock.sendMessage(jid, { react: { text: '⬇️', key: msg.key } }); } catch (_) {}
+            return downloadMusic(sock, msg, jid, selected, input);
+        }
+
+        try { await sock.sendMessage(jid, { react: { text: '🔍', key: msg.key } }); } catch (_) {}
+
+        let results = null;
+        let searchSource = '';
+
+        for (const api of SEARCH_APIS) {
+            try {
+                results = await api.fn(input);
+                if (results?.length) { searchSource = api.name; break; }
+            } catch (err) { console.log(`⚠️ Search ${api.name}: ${err.message}`); }
+        }
+
+        if (!results?.length) {
+            try { await sock.sendMessage(jid, { react: { text: '❌', key: msg.key } }); } catch (_) {}
+            return sock.sendMessage(jid, { text: '❌ No results found.', contextInfo: STYLE }, { quoted: msg });
+        }
+
+        const valid = results.filter(r => !r.durationSeconds || r.durationSeconds <= MAX_DURATION_SECONDS).slice(0, 5);
+        const final = valid.length ? valid : results.slice(0, 5);
+
+        activeSearches.set(senderJid, { results: final, timestamp: Date.now() });
+
+        let reply = `🎵 *Search: ${input}*\n🎼 *Source:* ${searchSource}\n\n`;
+        final.forEach((r, i) => {
+            reply += `*${i + 1}.* ${r.title}\n   ⏱ ${formatDuration(r.durationSeconds)}`;
+            if (r.views) reply += ` | 👁 ${r.views}`;
+            if (r.channel) reply += ` | 📺 ${r.channel}`;
+            reply += '\n\n';
+        });
+        reply += '📌 Reply: .play2 <number>\n⏳ Expires in 5 min.';
+
+        await sock.sendMessage(jid, { text: reply, contextInfo: STYLE }, { quoted: msg });
+        try { await sock.sendMessage(jid, { react: { text: '✅', key: msg.key } }); } catch (_) {}
+
+        setTimeout(() => { if (activeSearches.get(senderJid)?.timestamp < Date.now() - 300000) activeSearches.delete(senderJid); }, 300000);
+    },
+};
+
+async function downloadMusic(sock, msg, jid, track, query) {
+    let dlResult = null;
+
+    for (const api of DOWNLOAD_APIS) {
+        try {
+            dlResult = await api.fn(track.url);
+            if (dlResult?.downloadUrl && dlResult.downloadUrl.startsWith('http')) break;
+        } catch (_) {}
+    }
+
+    if (!dlResult?.downloadUrl) {
+        try { await sock.sendMessage(jid, { react: { text: '❌', key: msg.key } }); } catch (_) {}
+        return sock.sendMessage(jid, { text: '❌ All download sources failed.', contextInfo: STYLE }, { quoted: msg });
+    }
+
+    try { await sock.sendMessage(jid, { react: { text: '⬇️', key: msg.key } }); } catch (_) {}
+
+    const audioRes = await axios.get(dlResult.downloadUrl, { responseType: 'arraybuffer', timeout: 120000 });
+    const buffer = Buffer.from(audioRes.data);
+    const sizeMB = (buffer.length / 1048576).toFixed(2);
+
+    const title = dlResult.title || track.title || query;
+    const thumb = dlResult.thumbnail || track.thumbnail || FALLBACK_THUMB;
+
+    // ⭐ AUDIO SANS STYLE CYBERNOVA — seul externalAdReply pour le nom + image
+    await sock.sendMessage(jid, {
+        audio: buffer,
+        mimetype: 'audio/mpeg',
+        ptt: false,
+        contextInfo: {
+            externalAdReply: {
+                title: title,
+                body: dlResult.artist || track.channel || 'YouTube Music',
+                thumbnailUrl: thumb,
+                sourceUrl: track.url,
+                mediaType: 1,
+                renderLargerThumbnail: true,
+            },
+        },
+    }, { quoted: msg });
+
+    // Message d'info AVEC style CyberNova
+    await sock.sendMessage(jid, {
+        text:
+            '🎵 *Music Downloaded*\n\n' +
+            `📌 *Title:* ${title}\n` +
+            (dlResult.artist ? `🎤 *Artist:* ${dlResult.artist}\n` : '') +
+            (track.durationSeconds ? `⏱ *Duration:* ${formatDuration(track.durationSeconds)}\n` : '') +
+            `📦 *Size:* ${sizeMB} MB\n` +
+            `🔗 ${track.url}\n\n` +
+            '_𝐊𝐈𝐋𝐋𝐔𝐀 𝐓𝐄𝐀𝐌_',
+        contextInfo: STYLE,
+    }, { quoted: msg });
+
+    try { await sock.sendMessage(jid, { react: { text: '✅', key: msg.key } }); } catch (_) {}
+}
